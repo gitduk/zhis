@@ -55,6 +55,12 @@ pub fn format_row(row: &Row, now: i64) -> String {
         Some(i) => format!("{} ⏎", &e.c[..i]),
         None => e.c.clone(),
     };
+    // A pasted \x1f (the field delimiter) or ANSI escape would split the row
+    // into phantom columns or recolor it; strip control bytes from display.
+    let disp: String = disp
+        .chars()
+        .filter(|c| !c.is_control() || *c == '\t')
+        .collect();
     let col = if e.x > 0 { C_RED } else { "" };
     // FIELD_DELIM is invisible on screen, so each field's own trailing space
     // keeps a visible gap (fzf --with-nth reassembles using that same byte).
@@ -107,6 +113,32 @@ mod tests {
         for &(ms, want) in cases {
             assert_eq!(fmt_dur(ms), want, "fmt_dur({})", ms);
         }
+    }
+
+    #[test]
+    fn format_row_strips_control_bytes_from_command() {
+        use crate::store::Entry;
+        let row = Row {
+            entry: Entry {
+                t: 0,
+                d: "/d".into(),
+                x: 0,
+                c: "ls\x1f-a\x1b[31m".into(),
+                m: 0,
+            },
+            id: "0-1".into(),
+        };
+        let out = format_row(&row, 0);
+        // The row's own three delimiters are all that may appear; a command
+        // carrying FIELD_DELIM would otherwise mint phantom fzf columns.
+        assert_eq!(out.matches('\x1f').count(), 3, "row: {:?}", out);
+        // The command's escape must not survive to recolor the picker.
+        assert!(
+            !out.contains("\x1b[31m"),
+            "command escape leaked: {:?}",
+            out
+        );
+        assert!(out.contains("ls-a"), "command text was mangled: {:?}", out);
     }
 
     #[test]

@@ -162,6 +162,8 @@ impl Store {
             for (idx, entry) in entries.iter().enumerate() {
                 encoded.push(encode_line(start + 1 + idx as i64, entry)?);
             }
+            // Deliberately before the data write: a rolled-back append leaves
+            // a gap in the sequence, which is harmless, but a reused id is not.
             self.write_seq(start + entries.len() as i64)?;
 
             let result = (|| -> Result<(), StoreError> {
@@ -287,6 +289,8 @@ impl Store {
 
         self.with_lock(LockMode::Ex, || {
             let rows = self.read_all()?;
+            // Both arms name the same row (i is unique); the first only
+            // avoids a reverse scan while the offset is still current.
             let target = rows
                 .iter()
                 .position(|row| row.offset == offset && row.i == i)
@@ -681,7 +685,7 @@ fn radix36(mut n: i64) -> String {
         n /= 36;
     }
     buf.reverse();
-    String::from_utf8(buf).unwrap()
+    buf.into_iter().map(char::from).collect()
 }
 
 /// Parses `offset36-i36` into its parts. Returns None for malformed IDs.
