@@ -37,15 +37,6 @@ Add to `.zshrc`:
 eval "$(zhis init)"
 ```
 
-Plugin managers can source `zhis.plugin.zsh` instead, which runs the same
-line. Example with zsh-snap:
-
-```zsh
-znap source overflowy/zhist
-```
-
-The plugin file only loads the integration. Install the binary first.
-
 Import existing history once:
 
 ```sh
