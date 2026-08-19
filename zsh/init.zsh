@@ -88,11 +88,11 @@ _fhistory_select() {
 	# Starts hidden: the first focus event decides whether this row needs it.
 	local pwin="up,1,wrap,noinfo,hidden"
 	# The preview shows only what the row cannot: a command wider than its
-	# column (20 cols: pointer, duration, age, scrollbar) or a multiline one.
+	# column (19 cols: pointer, duration, age, scrollbar) or a multiline one.
 	local off="change-preview-window(up,1,wrap,noinfo,hidden)"
-	# Height is that command's wrapped height: fzf's border costs 2 columns, a
-	# wrapped line 2 more. bg-transform resizes mid-draw, so: sync.
-	local wrapped='BEGIN { if (w < 24) w = 80; a = w - 2; b = w - 4; row = w - 20 } { l = length($0); n += (l <= a ? 1 : 1 + int((l - a + b - 1) / b)); if (NR == 1 && l > row) cut = 1 } END { if (NR < 2 && !cut) exit 1; print (n > 10 ? 10 : n) }'
+	# Height is that command's wrapped height; only fzf's border eats width,
+	# the wrap marker being off. bg-transform resizes mid-draw, so: sync.
+	local wrapped='BEGIN { if (w < 24) w = 80; a = w - 2; row = w - 19 } { l = length($0); n += (l <= a ? 1 : int((l + a - 1) / a)); if (NR == 1 && l > row) cut = 1 } END { if (NR < 2 && !cut) exit 1; print (n > 10 ? 10 : n) }'
 	local fit="[ -f $qstate ] && { echo \"$off\"; exit; }; n=\$(zhis get -id $idf | awk -v w=\"\$FZF_COLUMNS\" '$wrapped') || { echo \"$off\"; exit; }; echo \"change-preview-window(up,\$n,wrap,noinfo)\""
 	local id
 	# Clear the user's fzf defaults so zhis renders the same on every machine.
@@ -101,6 +101,7 @@ _fhistory_select() {
 			--tabstop=1 --delimiter="$_zhis_delim" --with-nth="$_zhis_with_nth" \
 			--info-command="$info" \
 			--preview="zhis get -id $idf" --preview-window=$pwin \
+			--preview-wrap-sign="" \
 			--bind "start:reload($reload)" \
 			--bind "tab:accept" \
 			--bind "ctrl-/:execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)+transform:$fit" \

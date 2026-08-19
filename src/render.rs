@@ -17,15 +17,15 @@ pub const DISPLAY_FIELDS: &str = "2..";
 pub fn rel_time(t: i64, now: i64) -> String {
     let ago = now - t;
     if ago < 60 {
-        format!("{:>2}s ago", ago)
+        format!("{:>2}s", ago)
     } else if ago < 3600 {
-        format!("{:>2}m ago", ago / 60)
+        format!("{:>2}m", ago / 60)
     } else if ago < 86400 {
-        format!("{:>2}h ago", ago / 3600)
+        format!("{:>2}h", ago / 3600)
     } else if ago < 604800 {
-        format!("{:>2}d ago", ago / 86400)
+        format!("{:>2}d", ago / 86400)
     } else {
-        format!("{:>2}w ago", ago / 604800)
+        format!("{:>2}w", ago / 604800)
     }
 }
 
@@ -66,7 +66,7 @@ fn display_command(c: &str) -> String {
 /// keeps a visible gap (fzf --with-nth reassembles using that same byte).
 fn format_line(id: &str, dur: &str, ago: &str, col: &str, disp: &str) -> String {
     format!(
-        "{id}{d}{dim}{dur:>7} {reset}{d}{blue}{ago:>8} {reset}{d}{col}{disp}{reset}",
+        "{id}{d}{dim}{dur:>7} {reset}{d}{blue}{ago:>7} {reset}{d}{col}{disp}{reset}",
         d = FIELD_DELIM,
         dim = C_DIM,
         reset = C_RESET,
@@ -196,14 +196,14 @@ mod tests {
     #[test]
     fn rel_time_cases() {
         let now = 1_000_000;
-        assert_eq!(rel_time(now - 5, now), " 5s ago");
-        assert_eq!(rel_time(now - 59, now), "59s ago");
-        assert_eq!(rel_time(now - 60, now), " 1m ago");
-        assert_eq!(rel_time(now - 3599, now), "59m ago");
-        assert_eq!(rel_time(now - 3600, now), " 1h ago");
-        assert_eq!(rel_time(now - 86_399, now), "23h ago");
-        assert_eq!(rel_time(now - 86_400, now), " 1d ago");
-        assert_eq!(rel_time(now - 604_799, now), " 6d ago");
-        assert_eq!(rel_time(now - 604_800, now), " 1w ago");
+        assert_eq!(rel_time(now - 5, now), " 5s");
+        assert_eq!(rel_time(now - 59, now), "59s");
+        assert_eq!(rel_time(now - 60, now), " 1m");
+        assert_eq!(rel_time(now - 3599, now), "59m");
+        assert_eq!(rel_time(now - 3600, now), " 1h");
+        assert_eq!(rel_time(now - 86_399, now), "23h");
+        assert_eq!(rel_time(now - 86_400, now), " 1d");
+        assert_eq!(rel_time(now - 604_799, now), " 6d");
+        assert_eq!(rel_time(now - 604_800, now), " 1w");
     }
 }
