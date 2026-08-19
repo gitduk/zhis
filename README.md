@@ -173,15 +173,24 @@ Compatibility notes:
 
 ## CLI
 
+What you run yourself:
+
 ```
 zhis init [-no-arrow-binds]  Print the zsh integration script
-zhis add -dir D -exit N [-ms N] [-pid N]  Append an entry; command read from stdin
-zhis begin -pid N [-dir D]  Mark a command as started; command read from stdin
-zhis list [-dir D] [-limit N]  Print entries for fzf, newest first
-zhis get -id ID           Print the full command for an entry
-zhis delete -id ID [-all] Delete an entry, or all entries with its command
+zhis list [-dir D] [-limit N]  Print entries, newest first
 zhis import FILE          Import a zsh EXTENDED_HISTORY file
 zhis import-jsonl [FILE]  Import newline-delimited JSON entries (stdin if omitted)
+```
+
+What the hooks and the picker run for you. Nothing stops you from calling
+these, and a bash or fish integration would be written against exactly them,
+but typing one by hand is not a thing you should need to do:
+
+```
+zhis begin -pid N [-dir D] [-ts N]  Mark a command as started; command from stdin
+zhis add -dir D -exit N [-ms N] [-ts N] [-pid N]  Append an entry; command from stdin
+zhis get -id ID           Print the full command for an entry
+zhis delete -id ID [-all] Delete an entry, or all entries with its command
 ```
 
 ## Storage
