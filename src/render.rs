@@ -14,37 +14,66 @@ pub const FIELD_DELIM: char = '\x1f';
 pub const ID_FIELD: usize = 1;
 pub const DISPLAY_FIELDS: &str = "2..";
 
+// Seconds per rung of rel_time's ladder. A year is 52 weeks, not the
+// calendar's 365 days, so the boundary lands on the rung it replaces.
+const S_MIN: i64 = 60;
+const S_HOUR: i64 = 60 * S_MIN;
+const S_DAY: i64 = 24 * S_HOUR;
+const S_WEEK: i64 = 7 * S_DAY;
+const S_YEAR: i64 = 52 * S_WEEK;
+
 pub fn rel_time(t: i64, now: i64) -> String {
     let ago = now - t;
-    if ago < 60 {
+    if ago < S_MIN {
         format!("{:>2}s", ago)
-    } else if ago < 3600 {
-        format!("{:>2}m", ago / 60)
-    } else if ago < 86400 {
-        format!("{:>2}h", ago / 3600)
-    } else if ago < 604800 {
-        format!("{:>2}d", ago / 86400)
+    } else if ago < S_HOUR {
+        format!("{:>2}m", ago / S_MIN)
+    } else if ago < S_DAY {
+        format!("{:>2}h", ago / S_HOUR)
+    } else if ago < S_WEEK {
+        format!("{:>2}d", ago / S_DAY)
+    } else if ago < S_YEAR {
+        format!("{:>2}w", ago / S_WEEK)
     } else {
-        format!("{:>2}w", ago / 604800)
+        format!("{:>2}y", ago / S_YEAR)
     }
 }
 
-/// Renders a duration in milliseconds; "" when unknown.
+// Milliseconds per rung of fmt_dur's ladder. Month and year are stipulated,
+// not the calendar's: only then can the year rung never print "1y12m".
+const MS_SEC: i64 = 1_000;
+const MS_MIN: i64 = 60 * MS_SEC;
+const MS_HOUR: i64 = 60 * MS_MIN;
+const MS_DAY: i64 = 24 * MS_HOUR;
+const MS_MONTH: i64 = 30 * MS_DAY;
+const MS_YEAR: i64 = 12 * MS_MONTH;
+
+/// Renders a duration in milliseconds as its two largest units; "" when
+/// unknown.
 pub fn fmt_dur(ms: i64) -> String {
     if ms <= 0 {
         return String::new();
     }
-    if ms < 1000 {
+    if ms < MS_SEC {
         return format!("{}ms", ms);
     }
-    if ms < 60_000 {
-        // Truncate like the branches below; rounding could show "60.0s".
-        return format!("{}.{}s", ms / 1000, ms % 1000 / 100);
+    if ms < MS_MIN {
+        // Truncate like the rungs below; rounding could show "60.0s".
+        return format!("{}.{}s", ms / MS_SEC, ms % MS_SEC / 100);
     }
-    if ms < 3_600_000 {
-        return format!("{}m{:02}s", ms / 60_000, ms % 60_000 / 1000);
+    if ms < MS_HOUR {
+        return format!("{}m{:02}s", ms / MS_MIN, ms % MS_MIN / MS_SEC);
     }
-    format!("{}h{:02}m", ms / 3_600_000, ms % 3_600_000 / 60_000)
+    if ms < MS_DAY {
+        return format!("{}h{:02}m", ms / MS_HOUR, ms % MS_HOUR / MS_MIN);
+    }
+    if ms < MS_MONTH {
+        return format!("{}d{:02}h", ms / MS_DAY, ms % MS_DAY / MS_HOUR);
+    }
+    if ms < MS_YEAR {
+        return format!("{}m{:02}d", ms / MS_MONTH, ms % MS_MONTH / MS_DAY);
+    }
+    format!("{}y{:02}m", ms / MS_YEAR, ms % MS_YEAR / MS_MONTH)
 }
 
 /// The command as the picker shows it: first line only for multiline
@@ -66,7 +95,7 @@ fn display_command(c: &str) -> String {
 /// keeps a visible gap (fzf --with-nth reassembles using that same byte).
 fn format_line(id: &str, dur: &str, ago: &str, col: &str, disp: &str) -> String {
     format!(
-        "{id}{d}{dim}{dur:>7} {reset}{d}{blue}{ago:>7} {reset}{d}{col}{disp}{reset}",
+        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{col}{disp}{reset}",
         d = FIELD_DELIM,
         dim = C_DIM,
         reset = C_RESET,
@@ -96,7 +125,7 @@ pub fn format_running_row(row: &Row, now: i64) -> String {
     format_line(
         &row.id,
         &fmt_dur(elapsed),
-        "running",
+        "...",
         C_DIM,
         &display_command(&e.c),
     )
@@ -132,7 +161,17 @@ mod tests {
             (3_599_000, "59m59s"),
             (3_600_000, "1h00m"),
             (9_000_000, "2h30m"),
-            (90_000_000, "25h00m"),
+            (86_399_000, "23h59m"),
+            (86_400_000, "1d00h"),
+            (90_000_000, "1d01h"),
+            (2_591_999_000, "29d23h"),
+            (2_592_000_000, "1m00d"),
+            (8_640_000_000, "3m10d"),
+            (31_103_999_000, "11m29d"),
+            (31_104_000_000, "1y00m"),
+            (34_560_000_000, "1y01m"),
+            (62_207_999_000, "1y11m"),
+            (62_208_000_000, "2y00m"),
         ];
         for &(ms, want) in cases {
             assert_eq!(fmt_dur(ms), want, "fmt_dur({})", ms);
@@ -188,7 +227,7 @@ mod tests {
             out
         );
         assert!(out.contains("@4242"), "id lost: {:?}", out);
-        assert!(out.contains("running"), "not marked as running: {:?}", out);
+        assert!(out.contains("..."), "not marked as running: {:?}", out);
         // 60s elapsed, rendered from seconds since t rather than from `m`.
         assert!(out.contains("1m00s"), "elapsed not shown: {:?}", out);
     }
@@ -205,5 +244,8 @@ mod tests {
         assert_eq!(rel_time(now - 86_400, now), " 1d");
         assert_eq!(rel_time(now - 604_799, now), " 6d");
         assert_eq!(rel_time(now - 604_800, now), " 1w");
+        assert_eq!(rel_time(now - 31_449_599, now), "51w");
+        assert_eq!(rel_time(now - 31_449_600, now), " 1y");
+        assert_eq!(rel_time(now - 94_348_800, now), " 3y");
     }
 }

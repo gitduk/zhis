@@ -93,10 +93,10 @@ returns. A long-running foreground command â€” a dev server, `tail -f`, `ssh` â€
 would therefore be missing from every other shell's history until it exited.
 
 `preexec` now also writes a short-lived record, so the command shows in the
-picker while it runs, marked `running` with a live elapsed time:
+picker while it runs, marked `...` with a live elapsed time:
 
 ```
-@31337    4.0s  running  uv run uvicorn main:app --reload
+@31337  4.0s ... uv run uvicorn main:app --reload
 ```
 
 Selecting one puts the command on the line like any other entry. `ctrl-d` and
