@@ -102,7 +102,7 @@ picker while it runs, marked `running` with a live elapsed time:
 Selecting one puts the command on the line like any other entry. `ctrl-d` and
 `ctrl-x` do not apply: the record disappears on its own when the command ends,
 at which point the real entry lands in `history.jsonl` with its exit status and
-duration. Running commands ignore `ZHIS_LIST_LIMIT` — there are only ever as
+duration, keeping the timestamp it started with, so the row does not jump. Running commands ignore `ZHIS_LIST_LIMIT` — there are only ever as
 many as you have shells.
 
 Records live in `~/.local/share/zhis/inflight/<pid>.json`, one per shell, and
@@ -134,10 +134,11 @@ It is off by default because it does hide history: nothing past the newest N
 entries is searchable. Non-numeric values are ignored with a warning.
 
 One subtlety. The limit selects by position in the file and only then sorts by
-time, so the two orders can disagree inside a stretch of imported history —
-zhis's own appends are always in time order, but a `zhis import` writes old
-entries at the end of the file. If you have just imported and want the oldest
-entries visible, leave the limit unset.
+time, so the two orders can disagree. A `zhis import` writes old entries at the
+end of the file, and an entry is timestamped when its command started, so a
+command that ran for an hour lands in the file after commands that started —
+and finished — while it was still running. If you have just imported and want
+the oldest entries visible, leave the limit unset.
 
 ## Recommended zsh history settings
 

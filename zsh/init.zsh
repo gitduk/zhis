@@ -31,13 +31,16 @@ _zhis_precmd() {
 		_zhis_cmd=""
 		# Integer assignment truncates the float result.
 		local elapsed=0
-		local -i ms=0
+		local -i ms=0 ts=0
 		(( start > 0 )) && elapsed=$(( EPOCHREALTIME - start ))
 		(( ms = elapsed * 1000 ))
 		(( start > 0 && elapsed >= 0 && ms == 0 )) && ms=1
 		(( ms < 0 )) && ms=0
+		# -ts is when the command started, not when it returned: a command that
+		# ran for hours belongs where the user typed it. 0 falls back to now.
+		(( ts = start ))
 		# -pid clears the in-flight record `zhis begin` wrote.
-		print -r -- "$cmd" | zhis add -pid $$ -dir "$dir" -exit $ret -ms $ms
+		print -r -- "$cmd" | zhis add -pid $$ -dir "$dir" -exit $ret -ms $ms -ts $ts
 	fi
 	return $ret
 }
