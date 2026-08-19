@@ -48,6 +48,7 @@ add-zsh-hook preexec _zhis_preexec
 # add-zsh-hook would append; filter instead so re-sourcing cannot stack copies.
 precmd_functions=(_zhis_precmd ${precmd_functions:#_zhis_precmd})
 
+# $1 seeds fzf's query, so ctrl-r on a half-typed line searches for it.
 _fhistory_select() {
 	local qpwd=${(q)PWD}
 	# Row layout comes from `zhis init`; see FIELD_DELIM/ID_FIELD in render.rs.
@@ -76,7 +77,7 @@ _fhistory_select() {
 	local reload="$mread; if [ \"\$m\" = dir ]; then zhis list$lim -dir $qpwd; else zhis list$lim; fi"
 	local flip="$mread; if [ \"\$m\" = dir ]; then echo global > $qm; else echo dir > $qm; fi"
 	# $FZF_INFO is the match counter fzf would have drawn on its own.
-	local info="$mread; printf '%s %s' \"\$m\" \"\$FZF_INFO\""
+	local info="$mread; printf '%s %s' \"\$FZF_INFO\" \"\$m\""
 	# The off-switch, not the per-row decision, persists across sessions.
 	local pstate="${XDG_STATE_HOME:-$HOME/.local/state}/zhis/preview-hidden"
 	mkdir -p "${pstate:h}"
@@ -93,11 +94,10 @@ _fhistory_select() {
 	local id
 	# Clear the user's fzf defaults so zhis renders the same on every machine.
 	id=$(FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= \
-		fzf --ansi --tiebreak=index \
+		fzf --ansi --tiebreak=index --query="$1" \
 			--tabstop=1 --delimiter="$_zhis_delim" --with-nth="$_zhis_with_nth" \
 			--info-command="$info" \
 			--preview="zhis get -id $idf" --preview-window=$pwin \
-			--header="ctrl-g: dir/global · ctrl-d: delete entry · ctrl-x: delete all · ctrl-/: preview" \
 			--bind "start:reload($reload)" \
 			--bind "tab:accept" \
 			--bind "ctrl-/:execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)+transform:$fit" \
@@ -119,7 +119,7 @@ _fhistory_widget() {
 		zle down-line-or-history
 	else
 		local selected
-		selected=$(_fhistory_select)
+		selected=$(_fhistory_select "$BUFFER")
 		if [[ -n "$selected" ]]; then
 			BUFFER="$selected"
 			CURSOR=${#BUFFER}

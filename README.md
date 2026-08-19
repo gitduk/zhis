@@ -50,7 +50,7 @@ blank directory and never render red.
 
 | Key                | Action                                            |
 | ------------------ | ------------------------------------------------- |
-| `ctrl-r`           | Open the history picker                           |
+| `ctrl-r`           | Open the picker, searching for what is on the line |
 | `up` / `down`      | Open the picker on an empty line; otherwise step line history |
 | `ctrl-g`           | Toggle global / current-directory history         |
 | `ctrl-d`           | Delete the selected entry (no-op on a running one) |
