@@ -278,22 +278,37 @@ fn init_layout_vars_match_what_list_actually_emits() {
 fn init_arrow_binds_are_opt_out() {
     let dir = tempfile::tempdir().unwrap();
 
+    // Matches the key literal, not the whole bindkey line: which keymaps each
+    // bind names is a separate decision from whether the bind is emitted.
     let with = stdout(&run(dir.path(), &["init"]));
     assert!(
-        with.contains("bindkey '^[[A'"),
+        with.contains("'^[[A'"),
         "default init lost the up-arrow bind"
     );
-    assert!(with.contains("bindkey '^R'"));
+    assert!(with.contains("'^R'"));
 
     let without = stdout(&run(dir.path(), &["init", "-no-arrow-binds"]));
     assert!(
-        !without.contains("bindkey '^[[A'"),
+        !without.contains("'^[[A'"),
         "-no-arrow-binds still bound up-arrow"
     );
     assert!(
-        without.contains("bindkey '^R'"),
+        without.contains("'^R'"),
         "-no-arrow-binds dropped ctrl-r too"
     );
+}
+
+#[test]
+fn ctrl_r_is_bound_in_every_keymap_the_user_types_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = stdout(&run(dir.path(), &["init"]));
+    for km in ["emacs", "viins", "vicmd"] {
+        assert!(
+            out.contains(&format!("bindkey -M {} '^R'", km)),
+            "ctrl-r unbound in {}: a bare bindkey only hits the current keymap",
+            km
+        );
+    }
 }
 
 #[test]

@@ -53,7 +53,7 @@ blank directory and never render red.
 | `ctrl-r`           | Open the history picker                           |
 | `up` / `down`      | Open the picker on an empty line; otherwise step line history |
 | `ctrl-g`           | Toggle global / current-directory history         |
-| `ctrl-d`           | Delete the selected entry                         |
+| `ctrl-d`           | Delete the selected entry (no-op on a running one) |
 | `ctrl-x`           | Delete all entries with the same command          |
 | `tab`              | Accept and leave the command on the line          |
 
@@ -75,6 +75,34 @@ HIST_EXCLUDE=(cd ls clear pwd exit)
 - The hook reads the array at record time. Change it in a running shell and
   the change applies to the next command.
 - A leading space also skips recording, for one-off exclusions.
+
+## Running commands
+
+zhis records a command from `precmd`, which zsh runs only after the command
+returns. A long-running foreground command — a dev server, `tail -f`, `ssh` —
+would therefore be missing from every other shell's history until it exited.
+
+`preexec` now also writes a short-lived record, so the command shows in the
+picker while it runs, marked `running` with a live elapsed time:
+
+```
+@31337    4.0s  running  uv run uvicorn main:app --reload
+```
+
+Selecting one puts the command on the line like any other entry. `ctrl-d` and
+`ctrl-x` do not apply: the record disappears on its own when the command ends,
+at which point the real entry lands in `history.jsonl` with its exit status and
+duration. Running commands ignore `ZHIS_LIST_LIMIT` — there are only ever as
+many as you have shells.
+
+Records live in `~/.local/share/zhis/inflight/<pid>.json`, one per shell, and
+`history.jsonl` is untouched by them. A shell killed mid-command (`kill -9`)
+leaves its record behind; the next `zhis list` notices the pid is gone and
+sweeps it. The one gap: if the operating system reassigns that exact pid before
+any sweep runs, the stale record survives until the sweep sees it die again.
+
+Commands excluded from history — a leading space, or a first word in
+`HIST_EXCLUDE` — are never written here either.
 
 ## Large histories
 
@@ -136,7 +164,8 @@ Compatibility notes:
 
 ```
 zhis init [-no-arrow-binds]  Print the zsh integration script
-zhis add -dir D -exit N [-ms N]  Append an entry; command read from stdin
+zhis add -dir D -exit N [-ms N] [-pid N]  Append an entry; command read from stdin
+zhis begin -pid N [-dir D]  Mark a command as started; command read from stdin
 zhis list [-dir D] [-limit N]  Print entries for fzf, newest first
 zhis get -id ID           Print the full command for an entry
 zhis delete -id ID [-all] Delete an entry, or all entries with its command
@@ -152,6 +181,10 @@ Entries are appended as JSON lines to `~/.local/share/zhis/history.jsonl`
 ```json
 {"i":41,"t":1720000000,"d":"/home/you/src","x":0,"c":"cargo build","m":8123}
 ```
+
+Commands still running live outside this file, one per shell, in
+`~/.local/share/zhis/inflight/<pid>.json` (`{"t":..,"d":..,"c":..}` — no exit
+status or duration, because there is not one yet).
 
 - `i` — sequence number, unique and never reused
 - `t` — unix timestamp

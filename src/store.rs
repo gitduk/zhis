@@ -35,6 +35,12 @@ fn is_zero(v: &i64) -> bool {
     *v == 0
 }
 
+/// The mode with group and other stripped, or None when it is already
+/// owner-only. Both stores hold pasted secrets, so both mask the same bits.
+pub(crate) fn owner_only(mode: u32) -> Option<u32> {
+    (mode & 0o077 != 0).then_some(mode & !0o077)
+}
+
 /// On-disk line, read side. Not `#[serde(flatten)]` over `Entry` — that
 /// forces serde_json's slower buffered path on every row.
 #[derive(Deserialize)]
@@ -151,10 +157,9 @@ impl Store {
             let meta = f.metadata()?;
             let original_size = meta.len() as i64;
             // `.mode()` applies only when creating; an existing file keeps its
-            // own bits. History holds pasted secrets, so clear group/other.
-            let mode = meta.permissions().mode();
-            if mode & 0o077 != 0 {
-                f.set_permissions(fs::Permissions::from_mode(mode & !0o077))?;
+            // own bits.
+            if let Some(m) = owner_only(meta.permissions().mode()) {
+                f.set_permissions(fs::Permissions::from_mode(m))?;
             }
 
             let start = self.read_seq(&mut f, original_size)?;
@@ -705,6 +710,15 @@ fn parse_id(id: &str) -> Option<(i64, i64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_ids_and_inflight_ids_cannot_be_confused() {
+        assert!(parse_id("2f-19").is_some());
+        // `cmd_get` and `cmd_delete` both branch on this before reaching the
+        // store: an in-flight id must never parse as a stored row.
+        assert_eq!(parse_id(&crate::inflight::make_id(1234)), None);
+        assert_eq!(parse_id("@1234"), None);
+    }
 
     /// A `Store` in a temp dir that is removed on drop, panic included — the
     /// hand-rolled cleanup this replaced never ran on a failing assert.

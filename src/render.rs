@@ -47,34 +47,58 @@ pub fn fmt_dur(ms: i64) -> String {
     format!("{}h{:02}m", ms / 3_600_000, ms % 3_600_000 / 60_000)
 }
 
-/// One `zhis list` line: id, duration, relative time, then the command
-/// (multiline commands truncated to their first line, marked with "⏎").
-pub fn format_row(row: &Row, now: i64) -> String {
-    let e = &row.entry;
-    let disp = match e.c.find('\n') {
-        Some(i) => format!("{} ⏎", &e.c[..i]),
-        None => e.c.clone(),
+/// The command as the picker shows it: first line only for multiline
+/// commands, marked with "⏎", and control bytes stripped.
+fn display_command(c: &str) -> String {
+    let disp = match c.find('\n') {
+        Some(i) => format!("{} ⏎", &c[..i]),
+        None => c.to_string(),
     };
     // A pasted \x1f (the field delimiter) or ANSI escape would split the row
     // into phantom columns or recolor it; strip control bytes from display.
-    let disp: String = disp
-        .chars()
+    disp.chars()
         .filter(|c| !c.is_control() || *c == '\t')
-        .collect();
-    let col = if e.x > 0 { C_RED } else { "" };
-    // FIELD_DELIM is invisible on screen, so each field's own trailing space
-    // keeps a visible gap (fzf --with-nth reassembles using that same byte).
+        .collect()
+}
+
+/// The one row-layout literal, so the two row kinds cannot drift apart.
+/// FIELD_DELIM is invisible on screen, so each field's own trailing space
+/// keeps a visible gap (fzf --with-nth reassembles using that same byte).
+fn format_line(id: &str, dur: &str, ago: &str, col: &str, disp: &str) -> String {
     format!(
         "{id}{d}{dim}{dur:>7} {reset}{d}{blue}{ago:>8} {reset}{d}{col}{disp}{reset}",
-        id = row.id,
         d = FIELD_DELIM,
         dim = C_DIM,
-        dur = fmt_dur(e.m),
         reset = C_RESET,
         blue = C_BLUE,
-        ago = rel_time(e.t, now),
-        col = col,
-        disp = disp,
+    )
+}
+
+/// One `zhis list` line: id, duration, relative time, then the command.
+pub fn format_row(row: &Row, now: i64) -> String {
+    let e = &row.entry;
+    format_line(
+        &row.id,
+        &fmt_dur(e.m),
+        &rel_time(e.t, now),
+        if e.x > 0 { C_RED } else { "" },
+        &display_command(&e.c),
+    )
+}
+
+/// A row for a command that is still running: the duration column counts up
+/// from its start, and the command is dimmed rather than colored by an exit
+/// status it does not have yet.
+pub fn format_running_row(row: &Row, now: i64) -> String {
+    let e = &row.entry;
+    // Seconds resolution is all `t` carries; fmt_dur wants milliseconds.
+    let elapsed = (now - e.t).max(0).saturating_mul(1000);
+    format_line(
+        &row.id,
+        &fmt_dur(elapsed),
+        "running",
+        C_DIM,
+        &display_command(&e.c),
     )
 }
 
@@ -139,6 +163,34 @@ mod tests {
             out
         );
         assert!(out.contains("ls-a"), "command text was mangled: {:?}", out);
+    }
+
+    #[test]
+    fn format_running_row_keeps_the_row_contract() {
+        use crate::store::Entry;
+        let row = Row {
+            entry: Entry {
+                t: 100,
+                d: "/d".into(),
+                x: -1,
+                c: "sleep 9\x1f\x1b[31m".into(),
+                m: 0,
+            },
+            id: "@4242".into(),
+        };
+        let out = format_running_row(&row, 160);
+        // Same three-delimiter contract format_row keeps: a command carrying
+        // FIELD_DELIM must not mint phantom fzf columns.
+        assert_eq!(out.matches('\x1f').count(), 3, "row: {:?}", out);
+        assert!(
+            !out.contains("\x1b[31m"),
+            "command escape leaked: {:?}",
+            out
+        );
+        assert!(out.contains("@4242"), "id lost: {:?}", out);
+        assert!(out.contains("running"), "not marked as running: {:?}", out);
+        // 60s elapsed, rendered from seconds since t rather than from `m`.
+        assert!(out.contains("1m00s"), "elapsed not shown: {:?}", out);
     }
 
     #[test]

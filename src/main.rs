@@ -6,6 +6,7 @@
 
 mod cli;
 mod import;
+mod inflight;
 mod render;
 mod store;
 
@@ -17,7 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use cli::{die_err, die_usage, flags_or_die, int_flag};
 use import::{import_history, import_jsonl};
-use render::{format_row, zsh_layout_vars};
+use render::{format_row, format_running_row, zsh_layout_vars};
 use store::{Entry, Query, Store, StoreError};
 
 // The zsh integration is emitted by `zhis init`; see zsh/init.zsh.
@@ -45,22 +46,35 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-fn cmd_add(args: &[String]) {
-    let flags = flags_or_die(args, &["dir", "exit", "ts", "ms"], &[]);
-    let dir = flags.get("dir").cloned().unwrap_or_default();
-    let exit_status = int_flag(&flags, "exit", -1);
-    let ts = int_flag(&flags, "ts", 0);
-    let ms = int_flag(&flags, "ms", 0);
-
+/// The piped command text; None for a blank or whitespace-only read.
+fn read_piped_cmd() -> Option<String> {
     let mut raw = Vec::new();
     let _ = io::stdin().lock().read_to_end(&mut raw);
     let cmd = String::from_utf8_lossy(&raw)
         .trim_end_matches('\n')
         .to_string();
-    if cmd.trim().is_empty() {
-        return;
+    (!cmd.trim().is_empty()).then_some(cmd)
+}
+
+fn ts_or_now(ts: i64) -> i64 {
+    if ts != 0 {
+        ts
+    } else {
+        unix_now()
     }
-    let t = if ts != 0 { ts } else { unix_now() };
+}
+
+fn cmd_add(args: &[String]) {
+    let flags = flags_or_die(args, &["dir", "exit", "ts", "ms", "pid"], &[]);
+    let dir = flags.get("dir").cloned().unwrap_or_default();
+    let exit_status = int_flag(&flags, "exit", -1);
+    let ts = int_flag(&flags, "ts", 0);
+    let ms = int_flag(&flags, "ms", 0);
+
+    let Some(cmd) = read_piped_cmd() else {
+        return;
+    };
+    let t = ts_or_now(ts);
     let m = ms.max(0);
     let entry = Entry {
         t,
@@ -69,8 +83,48 @@ fn cmd_add(args: &[String]) {
         c: cmd,
         m,
     };
-    if let Err(e) = Store::new(data_path()).append(&[entry]) {
+    let path = data_path();
+    // Clear first: the command has finished either way, and a store error must
+    // not strand a record that would then show as still running.
+    if let Some(pid) = pid_flag(&flags) {
+        inflight::end(&path, pid);
+    }
+    if let Err(e) = Store::new(path).append(&[entry]) {
         die_err(&e);
+    }
+}
+
+/// Records a command as started. Paired with the `-pid` on `add`, which clears
+/// it again; see the preexec hook in zsh/init.zsh.
+fn cmd_begin(args: &[String]) {
+    let flags = flags_or_die(args, &["dir", "ts", "pid"], &[]);
+    let dir = flags.get("dir").cloned().unwrap_or_default();
+    let ts = int_flag(&flags, "ts", 0);
+    let pid = match pid_flag(&flags) {
+        Some(p) => p,
+        None => die_usage("usage: zhis begin -pid N [-dir D] [-ts N]"),
+    };
+
+    let Some(cmd) = read_piped_cmd() else {
+        return;
+    };
+    inflight::begin(&data_path(), pid, dir, cmd, ts_or_now(ts));
+}
+
+/// The shell's own pid (`$$`), which is not this process's — `zhis` runs as a
+/// child of the hook, so the caller must pass it. An unusable value warns and
+/// reads as absent: history.jsonl is the system of record, and `add` must not
+/// lose an entry over the in-flight bookkeeping flag.
+fn pid_flag(flags: &cli::Flags) -> Option<i32> {
+    if !flags.has("pid") {
+        return None;
+    }
+    match i32::try_from(int_flag(flags, "pid", 0)) {
+        Ok(p) if p > 0 => Some(p),
+        _ => {
+            eprintln!("zhis: ignoring -pid: not a usable process id");
+            None
+        }
     }
 }
 
@@ -84,7 +138,11 @@ fn cmd_list(args: &[String]) {
         // off without the caller special-casing the flag away.
         limit: (limit > 0).then_some(limit as usize),
     };
-    let rows = match Store::new(data_path()).query(&query) {
+    let path = data_path();
+    // Deliberately outside `-limit`: what is running now is what the user most
+    // wants to see, and there are only ever as many as there are live shells.
+    let running = inflight::rows(&path, query.dir.as_deref());
+    let rows = match Store::new(path).query(&query) {
         Ok(r) => r,
         Err(e) => die_err(&e),
     };
@@ -92,6 +150,9 @@ fn cmd_list(args: &[String]) {
 
     let stdout = io::stdout();
     let mut w = BufWriter::new(stdout.lock());
+    for row in &running {
+        writeln!(w, "{}", format_running_row(row, now)).ok();
+    }
     // Repeated runs each get a row; the picker stays faithful to what the
     // user did.
     for row in &rows {
@@ -103,7 +164,15 @@ fn cmd_list(args: &[String]) {
 fn cmd_get(args: &[String]) {
     let flags = flags_or_die(args, &["id"], &[]);
     let id = flags.get("id").cloned().unwrap_or_default();
-    match Store::new(data_path()).get(&id) {
+    let path = data_path();
+    if inflight::parse_id(&id).is_some() {
+        match inflight::get(&path, &id) {
+            Some(cmd) => println!("{}", cmd),
+            None => exit(1),
+        }
+        return;
+    }
+    match Store::new(path).get(&id) {
         Ok(entry) => println!("{}", entry.c),
         Err(StoreError::EntryNotFound) => exit(1),
         Err(e) => die_err(&e),
@@ -113,6 +182,11 @@ fn cmd_get(args: &[String]) {
 fn cmd_delete(args: &[String]) {
     let flags = flags_or_die(args, &["id"], &["all"]);
     let id = flags.get("id").cloned().unwrap_or_default();
+    // A running command is not the picker's to delete: the record clears itself
+    // when the command ends, and removing it would not stop the process.
+    if inflight::parse_id(&id).is_some() {
+        return;
+    }
     let all = flags.has("all");
     if let Err(e) = Store::new(data_path()).delete(&id, all) {
         die_err(&e);
@@ -159,12 +233,13 @@ fn cmd_init(args: &[String]) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: zhis <init|add|list|get|delete|import|import-jsonl> [flags]");
+        eprintln!("usage: zhis <init|add|begin|list|get|delete|import|import-jsonl> [flags]");
         exit(2);
     }
     match args[0].as_str() {
         "init" => cmd_init(&args[1..]),
         "add" => cmd_add(&args[1..]),
+        "begin" => cmd_begin(&args[1..]),
         "list" => cmd_list(&args[1..]),
         "get" => cmd_get(&args[1..]),
         "delete" => cmd_delete(&args[1..]),

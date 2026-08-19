@@ -1,11 +1,13 @@
 [package]
 name = "zhis"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A shell history tool for zsh, written in Rust. Records every command with its working directory, exit status, and duration."
 license = "MIT"
 
 [dependencies]
+# kill(pid, 0) to tell a live shell from one that died mid-command.
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

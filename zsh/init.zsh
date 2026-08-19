@@ -4,10 +4,22 @@ _zhis_cmd=""
 _zhis_dir=""
 _zhis_start=0
 
+# Decides recording here rather than in precmd: an excluded command must not
+# reach `zhis begin` either, or a leading space would still expose it to every
+# picker for as long as it runs.
 _zhis_preexec() {
-	_zhis_cmd="$1"
+	_zhis_cmd=""
 	_zhis_dir="$PWD"
 	_zhis_start=$EPOCHREALTIME
+	local cmd="$1"
+	[[ "$cmd" == \ * ]] && return
+	local first="${cmd%%$'\n'*}"
+	first="${first%% *}"
+	if (( ${+HIST_EXCLUDE} )) && [[ ${HIST_EXCLUDE[(ie)$first]} -le ${#HIST_EXCLUDE} ]]; then
+		return
+	fi
+	_zhis_cmd="$cmd"
+	print -r -- "$cmd" | zhis begin -pid $$ -dir "$_zhis_dir"
 }
 
 # Returns $ret so later precmd hooks (e.g. the prompt) still see the real
@@ -17,20 +29,15 @@ _zhis_precmd() {
 	if [[ -n "$_zhis_cmd" ]]; then
 		local cmd="$_zhis_cmd" dir="$_zhis_dir" start="$_zhis_start"
 		_zhis_cmd=""
-		if [[ "$cmd" != \ * ]]; then
-			local first="${cmd%%$'\n'*}"
-			first="${first%% *}"
-			if (( ! ${+HIST_EXCLUDE} )) || [[ ${HIST_EXCLUDE[(ie)$first]} -gt ${#HIST_EXCLUDE} ]]; then
-				# Integer assignment truncates the float result.
-				local elapsed=0
-				local -i ms=0
-				(( start > 0 )) && elapsed=$(( EPOCHREALTIME - start ))
-				(( ms = elapsed * 1000 ))
-				(( start > 0 && elapsed >= 0 && ms == 0 )) && ms=1
-				(( ms < 0 )) && ms=0
-				print -r -- "$cmd" | zhis add -dir "$dir" -exit $ret -ms $ms
-			fi
-		fi
+		# Integer assignment truncates the float result.
+		local elapsed=0
+		local -i ms=0
+		(( start > 0 )) && elapsed=$(( EPOCHREALTIME - start ))
+		(( ms = elapsed * 1000 ))
+		(( start > 0 && elapsed >= 0 && ms == 0 )) && ms=1
+		(( ms < 0 )) && ms=0
+		# -pid clears the in-flight record `zhis begin` wrote.
+		print -r -- "$cmd" | zhis add -pid $$ -dir "$dir" -exit $ret -ms $ms
 	fi
 	return $ret
 }
@@ -101,4 +108,8 @@ _fhistory_widget() {
 	fi
 }
 zle -N _fhistory_widget
-bindkey '^R' _fhistory_widget
+# Every keymap explicitly: a bare bindkey hits only the current one, which under
+# `bindkey -v` leaves vicmd's ctrl-r on whatever plugin bound it last.
+bindkey -M emacs '^R' _fhistory_widget
+bindkey -M viins '^R' _fhistory_widget
+bindkey -M vicmd '^R' _fhistory_widget
