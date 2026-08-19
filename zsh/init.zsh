@@ -50,7 +50,6 @@ precmd_functions=(_zhis_precmd ${precmd_functions:#_zhis_precmd})
 
 _fhistory_select() {
 	local qpwd=${(q)PWD}
-	local dprompt="Dir> " gprompt="Global> "
 	# Row layout comes from `zhis init`; see FIELD_DELIM/ID_FIELD in render.rs.
 	local idf="{$_zhis_id_field}"
 	# Unset means no limit: never silently hide old history. Set it to cap how
@@ -66,29 +65,48 @@ _fhistory_select() {
 	fi
 	# fzf needs the same flag as a string; derive it so the two cannot drift.
 	local lim="${limarg:+ ${(j: :)limarg}}"
-	# Branches on $FZF_PROMPT so reloads keep whatever mode ctrl-g selected.
-	local reload="if [ \"\$FZF_PROMPT\" = \"$dprompt\" ]; then zhis list$lim -dir $qpwd; else zhis list$lim; fi"
-	local toggle="if [ \"\$FZF_PROMPT\" = \"$dprompt\" ]; then echo \"change-prompt($gprompt)+reload(zhis list$lim)\"; else echo \"change-prompt($dprompt)+reload(zhis list$lim -dir $qpwd)\"; fi"
+	# Mode lives in a file, not the prompt: the info line renders it and every
+	# reload — the first one included — reads it back, so nothing else states
+	# it. One file per picker, so two shells cannot collide.
+	local mfile
+	mfile=$(mktemp "${TMPDIR:-/tmp}/zhis-mode.XXXXXX") || return
+	print -r -- dir > "$mfile"
+	local qm=${(q)mfile}
+	local mread="IFS= read -r m < $qm"
+	local reload="$mread; if [ \"\$m\" = dir ]; then zhis list$lim -dir $qpwd; else zhis list$lim; fi"
+	local flip="$mread; if [ \"\$m\" = dir ]; then echo global > $qm; else echo dir > $qm; fi"
+	# $FZF_INFO is the match counter fzf would have drawn on its own.
+	local info="$mread; printf '%s  %s' \"\$m\" \"\$FZF_INFO\""
 	# Preview visibility persists across sessions via a flag file.
 	local pstate="${XDG_STATE_HOME:-$HOME/.local/state}/zhis/preview-hidden"
 	mkdir -p "${pstate:h}"
 	local qstate=${(q)pstate}
-	local pwin="down,6,wrap"
-	[[ -f "$pstate" ]] && pwin="down,6,wrap,hidden"
+	local pwin="down,1,wrap,noinfo"
+	[[ -f "$pstate" ]] && pwin="$pwin,hidden"
+	# Preview height tracks the command's wrapped height: fzf's border costs 2
+	# columns, a wrapped line 2 more. Hidden means no lookup at all, so ctrl-/
+	# re-fits on the way back. bg-transform resizes mid-draw, so: sync.
+	local wrapped='BEGIN { if (w < 8) w = 80; a = w - 2; b = w - 4 } { l = length($0); n += (l <= a ? 1 : 1 + int((l - a + b - 1) / b)) } END { print (n < 1 ? 1 : (n > 10 ? 10 : n)) }'
+	local fit="[ -f $qstate ] && exit; n=\$(zhis get -id $idf | awk -v w=\"\$FZF_COLUMNS\" '$wrapped'); echo \"change-preview-window(down,\$n,wrap,noinfo)\""
 	local id
 	# Clear the user's fzf defaults so zhis renders the same on every machine.
-	id=$(zhis list "${limarg[@]}" |
-		FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= \
-		fzf --ansi --prompt="$gprompt" --tiebreak=index \
+	id=$(FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= \
+		fzf --ansi --tiebreak=index \
 			--tabstop=1 --delimiter="$_zhis_delim" --with-nth="$_zhis_with_nth" \
+			--info-command="$info" \
 			--preview="zhis get -id $idf" --preview-window=$pwin \
 			--header="ctrl-g: dir/global · ctrl-d: delete entry · ctrl-x: delete all · ctrl-/: preview" \
+			--bind "start:reload($reload)" \
 			--bind "tab:accept" \
-			--bind "ctrl-/:toggle-preview+execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)" \
-			--bind "ctrl-g:transform:$toggle" \
+			--bind "ctrl-/:toggle-preview+execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)+transform:$fit" \
+			--bind "ctrl-g:execute-silent($flip)+reload($reload)" \
+			--bind "focus:transform:$fit" \
+			--bind "resize:transform:$fit" \
 			--bind "ctrl-d:execute-silent(zhis delete -id $idf)+reload($reload)" \
-			--bind "ctrl-x:execute-silent(zhis delete -id $idf -all)+reload($reload)" |
+			--bind "ctrl-x:execute-silent(zhis delete -id $idf -all)+reload($reload)" \
+			< /dev/null |
 		cut -d"$_zhis_delim" -f"$_zhis_id_field")
+	rm -f "$mfile"
 	[[ -n "$id" ]] && zhis get -id "$id"
 }
 
