@@ -76,18 +76,20 @@ _fhistory_select() {
 	local reload="$mread; if [ \"\$m\" = dir ]; then zhis list$lim -dir $qpwd; else zhis list$lim; fi"
 	local flip="$mread; if [ \"\$m\" = dir ]; then echo global > $qm; else echo dir > $qm; fi"
 	# $FZF_INFO is the match counter fzf would have drawn on its own.
-	local info="$mread; printf '%s  %s' \"\$m\" \"\$FZF_INFO\""
-	# Preview visibility persists across sessions via a flag file.
+	local info="$mread; printf '%s %s' \"\$m\" \"\$FZF_INFO\""
+	# The off-switch, not the per-row decision, persists across sessions.
 	local pstate="${XDG_STATE_HOME:-$HOME/.local/state}/zhis/preview-hidden"
 	mkdir -p "${pstate:h}"
 	local qstate=${(q)pstate}
-	local pwin="down,1,wrap,noinfo"
-	[[ -f "$pstate" ]] && pwin="$pwin,hidden"
-	# Preview height tracks the command's wrapped height: fzf's border costs 2
-	# columns, a wrapped line 2 more. Hidden means no lookup at all, so ctrl-/
-	# re-fits on the way back. bg-transform resizes mid-draw, so: sync.
-	local wrapped='BEGIN { if (w < 8) w = 80; a = w - 2; b = w - 4 } { l = length($0); n += (l <= a ? 1 : 1 + int((l - a + b - 1) / b)) } END { print (n < 1 ? 1 : (n > 10 ? 10 : n)) }'
-	local fit="[ -f $qstate ] && exit; n=\$(zhis get -id $idf | awk -v w=\"\$FZF_COLUMNS\" '$wrapped'); echo \"change-preview-window(down,\$n,wrap,noinfo)\""
+	# Starts hidden: the first focus event decides whether this row needs it.
+	local pwin="down,1,wrap,noinfo,hidden"
+	# The preview shows only what the row cannot: a command wider than its
+	# column (20 cols: pointer, duration, age, scrollbar) or a multiline one.
+	local off="change-preview-window(down,1,wrap,noinfo,hidden)"
+	# Height is that command's wrapped height: fzf's border costs 2 columns, a
+	# wrapped line 2 more. bg-transform resizes mid-draw, so: sync.
+	local wrapped='BEGIN { if (w < 24) w = 80; a = w - 2; b = w - 4; row = w - 20 } { l = length($0); n += (l <= a ? 1 : 1 + int((l - a + b - 1) / b)); if (NR == 1 && l > row) cut = 1 } END { if (NR < 2 && !cut) exit 1; print (n > 10 ? 10 : n) }'
+	local fit="[ -f $qstate ] && { echo \"$off\"; exit; }; n=\$(zhis get -id $idf | awk -v w=\"\$FZF_COLUMNS\" '$wrapped') || { echo \"$off\"; exit; }; echo \"change-preview-window(down,\$n,wrap,noinfo)\""
 	local id
 	# Clear the user's fzf defaults so zhis renders the same on every machine.
 	id=$(FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= \
@@ -98,7 +100,7 @@ _fhistory_select() {
 			--header="ctrl-g: dir/global · ctrl-d: delete entry · ctrl-x: delete all · ctrl-/: preview" \
 			--bind "start:reload($reload)" \
 			--bind "tab:accept" \
-			--bind "ctrl-/:toggle-preview+execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)+transform:$fit" \
+			--bind "ctrl-/:execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)+transform:$fit" \
 			--bind "ctrl-g:execute-silent($flip)+reload($reload)" \
 			--bind "focus:transform:$fit" \
 			--bind "resize:transform:$fit" \

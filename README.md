@@ -55,7 +55,7 @@ blank directory and never render red.
 | `ctrl-g`           | Toggle global / current-directory history         |
 | `ctrl-d`           | Delete the selected entry (no-op on a running one) |
 | `ctrl-x`           | Delete all entries with the same command          |
-| `ctrl-/`           | Show or hide the preview (remembered across sessions) |
+| `ctrl-/`           | Turn the preview off, or back to automatic (remembered) |
 | `tab`              | Accept and leave the command on the line          |
 
 Pass `-no-arrow-binds` to `zhis init` to keep the default up/down behavior.
@@ -63,7 +63,12 @@ Only `ctrl-r` opens the picker then.
 
 The picker opens on the current directory's history; `ctrl-g` widens it to
 every directory and back. Which mode you are in is shown at the left of the
-match counter, and the preview is as tall as the selected command needs.
+match counter.
+
+The preview appears only when the row cannot show the whole command — because
+it is too wide for the terminal, or because it has more than one line — and it
+is exactly as tall as that command needs. `ctrl-/` turns it off entirely for
+rows that would otherwise get one.
 
 ## Ignoring commands
 
