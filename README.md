@@ -53,6 +53,7 @@ blank directory and never render red.
 | `ctrl-r`           | Open the picker, searching for what is on the line |
 | `up` / `down`      | Open the picker on an empty line; otherwise step line history |
 | `ctrl-g`           | Toggle global / current-directory history         |
+| `ctrl-u`           | Toggle collapsing consecutive repeats to one row  |
 | `ctrl-d`           | Delete the selected entry (no-op on a running one) |
 | `ctrl-x`           | Delete all entries with the same command          |
 | `ctrl-/`           | Turn the preview off, or back to automatic (remembered) |
@@ -113,6 +114,22 @@ any sweep runs, the stale record survives until the sweep sees it die again.
 
 Commands excluded from history — a leading space, or a first word in
 `HIST_EXCLUDE` — are never written here either.
+
+## Repeated commands
+
+Repeated runs each get a row — the store stays faithful to what you did, exit
+status and duration included. The picker has a dedupe view for when a run of
+repeats drowns everything else: `ctrl-u` collapses each consecutive run of the
+same command to its newest entry.
+
+- A run is a sequence of identical command text; exit status and duration do
+  not break it, so the row shown is the run's most recent attempt.
+- Only consecutive repeats collapse. The same command separated by other
+  commands still shows every occurrence.
+- With `ZHIS_LIST_LIMIT`, the dedupe view reads back far enough to show that
+  many distinct commands; the limit caps the collapsed rows, not the raw
+  entries behind them.
+- The store is untouched; toggle back to see every entry.
 
 ## Large histories
 
@@ -177,7 +194,7 @@ What you run yourself:
 
 ```
 zhis init [-no-arrow-binds]  Print the zsh integration script
-zhis list [-dir D] [-limit N]  Print entries, newest first
+zhis list [-dir D] [-limit N] [-uniq]  Print entries, newest first
 zhis import FILE          Import a zsh EXTENDED_HISTORY file
 zhis import-jsonl [FILE]  Import newline-delimited JSON entries (stdin if omitted)
 ```

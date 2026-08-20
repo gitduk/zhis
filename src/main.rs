@@ -129,7 +129,7 @@ fn pid_flag(flags: &cli::Flags) -> Option<i32> {
 }
 
 fn cmd_list(args: &[String]) {
-    let flags = flags_or_die(args, &["dir", "limit"], &[]);
+    let flags = flags_or_die(args, &["dir", "limit"], &["uniq"]);
     let dir = flags.get("dir").cloned().unwrap_or_default();
     let limit = int_flag(&flags, "limit", 0);
     let query = Query {
@@ -137,6 +137,7 @@ fn cmd_list(args: &[String]) {
         // A non-positive limit means unrestricted, so `-limit 0` can turn it
         // off without the caller special-casing the flag away.
         limit: (limit > 0).then_some(limit as usize),
+        uniq: flags.has("uniq"),
     };
     let path = data_path();
     // Deliberately outside `-limit`: what is running now is what the user most

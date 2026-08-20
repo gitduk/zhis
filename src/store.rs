@@ -105,11 +105,13 @@ pub struct Row {
     pub id: String,
 }
 
-/// What the picker asks for. `None` means unrestricted in both fields.
+/// What the picker asks for. `None` means unrestricted; `uniq` collapses
+/// consecutive repeats to their newest entry.
 #[derive(Debug, Default, Clone)]
 pub struct Query {
     pub dir: Option<String>,
     pub limit: Option<usize>,
+    pub uniq: bool,
 }
 
 struct StoredRow {
@@ -221,16 +223,28 @@ impl Store {
     /// only then sorts by time; they differ only inside imported history.
     pub fn query(&self, q: &Query) -> Result<Vec<Row>, StoreError> {
         let dir = q.dir.as_deref();
+        // `read_tail` with `uniq` already returns rows sorted newest-first and
+        // collapsed; every other path returns file-order rows needing both.
+        let presorted = q.uniq && q.limit.is_some();
         let mut rows = self.with_lock(LockMode::Sh, || match q.limit {
             None => self.read_rows(0, dir, None),
-            Some(want) => self.read_tail(want, dir),
+            Some(want) => self.read_tail(want, dir, q.uniq),
         })?;
-        // SHARE_HISTORY-imported files interleave sessions, so file order is
-        // not time order. Stable, so same-timestamp rows keep file order.
-        rows.sort_by_key(|r| r.entry.t);
+        if !presorted {
+            // SHARE_HISTORY-imported files interleave sessions, so file order
+            // is not time order. Stable, so same-timestamp rows keep order.
+            rows.sort_by_key(|r| r.entry.t);
+            rows.reverse();
+            if q.uniq {
+                // dedup keeps each run's first row, the newest after the reverse.
+                rows.dedup_by(|a, b| a.entry.c == b.entry.c);
+            }
+        }
+        if let Some(want) = q.limit {
+            rows.truncate(want);
+        }
         Ok(rows
             .into_iter()
-            .rev()
             .map(|r| Row {
                 entry: r.entry,
                 id: r.id,
@@ -239,8 +253,13 @@ impl Store {
     }
 
     /// Reads back far enough to yield `want` matching rows, widening the
-    /// window when a `dir` filter makes matches sparse.
-    fn read_tail(&self, want: usize, dir: Option<&str>) -> Result<Vec<StoredRow>, StoreError> {
+    /// window for a sparse `dir` filter or, with `uniq`, for deduped shrinkage.
+    fn read_tail(
+        &self,
+        want: usize,
+        dir: Option<&str>,
+        uniq: bool,
+    ) -> Result<Vec<StoredRow>, StoreError> {
         if want == 0 {
             return Ok(Vec::new());
         }
@@ -253,7 +272,7 @@ impl Store {
         let mut window = want;
         loop {
             let (from, hit_start) = nth_line_start_from_end(&mut f, size, window)?;
-            let rows = self.rows_from(&mut f, from, dir, Some(want))?;
+            let rows = self.read_window(&mut f, from, dir, want, uniq)?;
             if rows.len() >= want || hit_start {
                 return Ok(rows);
             }
@@ -261,9 +280,28 @@ impl Store {
             // work stays a constant factor of what the answer costs.
             window = match window.checked_mul(4) {
                 Some(w) => w,
-                None => return self.rows_from(&mut f, 0, dir, Some(want)),
+                None => return self.read_window(&mut f, 0, dir, want, uniq),
             };
         }
+    }
+
+    /// Reads `from`..EOF filtered by `dir`; with `uniq`, sorts newest-first
+    /// and collapses consecutive repeats so the survivors can be counted.
+    fn read_window(
+        &self,
+        f: &mut File,
+        from: i64,
+        dir: Option<&str>,
+        want: usize,
+        uniq: bool,
+    ) -> Result<Vec<StoredRow>, StoreError> {
+        let mut rows = self.rows_from(f, from, dir, if uniq { None } else { Some(want) })?;
+        if uniq {
+            rows.sort_by_key(|r| r.entry.t);
+            rows.reverse();
+            rows.dedup_by(|a, b| a.entry.c == b.entry.c);
+        }
+        Ok(rows)
     }
 
     pub fn get(&self, id: &str) -> Result<Entry, StoreError> {
@@ -1453,6 +1491,7 @@ mod tests {
                 .query(&Query {
                     dir: None,
                     limit: Some(want),
+                    uniq: false,
                 })
                 .unwrap();
             assert_eq!(
@@ -1478,6 +1517,7 @@ mod tests {
             .query(&Query {
                 dir: None,
                 limit: Some(3),
+                uniq: false,
             })
             .unwrap();
         for row in &tail {
@@ -1514,6 +1554,7 @@ mod tests {
             .query(&Query {
                 dir: Some("/rare".into()),
                 limit: None,
+                uniq: false,
             })
             .unwrap();
         assert_eq!(all.len(), 20);
@@ -1522,6 +1563,7 @@ mod tests {
                 .query(&Query {
                     dir: Some("/rare".into()),
                     limit: Some(want),
+                    uniq: false,
                 })
                 .unwrap();
             assert_eq!(
@@ -1544,6 +1586,7 @@ mod tests {
         let q = Query {
             dir: None,
             limit: Some(10),
+            uniq: false,
         };
         assert!(
             store.query(&q).unwrap().is_empty(),
@@ -1571,7 +1614,8 @@ mod tests {
             store
                 .query(&Query {
                     dir: None,
-                    limit: Some(0)
+                    limit: Some(0),
+                    uniq: false,
                 })
                 .unwrap()
                 .is_empty(),
@@ -1609,10 +1653,226 @@ mod tests {
             .query(&Query {
                 dir: None,
                 limit: Some(1),
+                uniq: false,
             })
             .unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].entry.c, "second");
+    }
+
+    #[test]
+    fn uniq_collapses_consecutive_repeats_to_newest() {
+        let store = test_store();
+        let entries = vec![
+            Entry {
+                t: 1,
+                d: "/a".into(),
+                x: 0,
+                c: "one".into(),
+                m: 0,
+            },
+            Entry {
+                t: 2,
+                d: "/a".into(),
+                x: 0,
+                c: "same".into(),
+                m: 10,
+            },
+            Entry {
+                t: 3,
+                d: "/a".into(),
+                x: 1,
+                c: "same".into(),
+                m: 20,
+            },
+            Entry {
+                t: 4,
+                d: "/a".into(),
+                x: 0,
+                c: "same".into(),
+                m: 30,
+            },
+            Entry {
+                t: 5,
+                d: "/a".into(),
+                x: 0,
+                c: "two".into(),
+                m: 0,
+            },
+        ];
+        store.append(&entries).unwrap();
+
+        let rows = store
+            .query(&Query {
+                dir: None,
+                limit: None,
+                uniq: true,
+            })
+            .unwrap();
+        // Newest first; the run of "same" collapses to its newest entry.
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].entry.c, "two");
+        assert_eq!(rows[1].entry.c, "same");
+        assert_eq!(rows[1].entry.t, 4, "collapsed run keeps its newest entry");
+        assert_eq!(rows[2].entry.c, "one");
+    }
+
+    #[test]
+    fn uniq_keeps_duplicates_separated_by_other_commands() {
+        let store = test_store();
+        let entries = vec![
+            Entry {
+                t: 1,
+                d: "/a".into(),
+                x: 0,
+                c: "same".into(),
+                m: 0,
+            },
+            Entry {
+                t: 2,
+                d: "/a".into(),
+                x: 0,
+                c: "other".into(),
+                m: 0,
+            },
+            Entry {
+                t: 3,
+                d: "/a".into(),
+                x: 0,
+                c: "same".into(),
+                m: 0,
+            },
+        ];
+        store.append(&entries).unwrap();
+
+        let rows = store
+            .query(&Query {
+                dir: None,
+                limit: None,
+                uniq: true,
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].entry.c, "same");
+        assert_eq!(rows[1].entry.c, "other");
+        assert_eq!(rows[2].entry.c, "same");
+    }
+
+    #[test]
+    fn uniq_with_limit_reads_back_until_it_has_limit_rows() {
+        let store = test_store();
+        // The newest five are one run of repeats; dedupe collapses them to
+        // one, so the limited read must widen past them to fetch older
+        // distinct commands.
+        let entries: Vec<Entry> = (0..10)
+            .map(|n| Entry {
+                t: 1_700_000_000 + n,
+                d: "/a".into(),
+                x: 0,
+                c: if n >= 5 {
+                    "repeat".into()
+                } else {
+                    format!("cmd{}", n)
+                },
+                m: 0,
+            })
+            .collect();
+        store.append(&entries).unwrap();
+
+        let rows = store
+            .query(&Query {
+                dir: None,
+                limit: Some(5),
+                uniq: true,
+            })
+            .unwrap();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].entry.c, "repeat");
+        assert_eq!(rows[0].entry.t, 1_700_000_000 + 9);
+        assert_eq!(rows[1].entry.c, "cmd4");
+        assert_eq!(rows[4].entry.c, "cmd1");
+    }
+
+    #[test]
+    fn uniq_with_limit_returns_what_exists_when_shorter() {
+        let store = test_store();
+        let entries = vec![
+            Entry {
+                t: 1,
+                d: "/a".into(),
+                x: 0,
+                c: "one".into(),
+                m: 0,
+            },
+            Entry {
+                t: 2,
+                d: "/a".into(),
+                x: 0,
+                c: "one".into(),
+                m: 0,
+            },
+            Entry {
+                t: 3,
+                d: "/a".into(),
+                x: 0,
+                c: "two".into(),
+                m: 0,
+            },
+        ];
+        store.append(&entries).unwrap();
+
+        let rows = store
+            .query(&Query {
+                dir: None,
+                limit: Some(10),
+                uniq: true,
+            })
+            .unwrap();
+        // Only two distinct commands exist; the limit cannot conjure more.
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].entry.c, "two");
+        assert_eq!(rows[1].entry.c, "one");
+    }
+
+    #[test]
+    fn uniq_applies_within_the_dir_filter() {
+        let store = test_store();
+        let entries = vec![
+            Entry {
+                t: 1,
+                d: "/a".into(),
+                x: 0,
+                c: "same".into(),
+                m: 0,
+            },
+            Entry {
+                t: 2,
+                d: "/b".into(),
+                x: 0,
+                c: "same".into(),
+                m: 0,
+            },
+            Entry {
+                t: 3,
+                d: "/a".into(),
+                x: 0,
+                c: "same".into(),
+                m: 0,
+            },
+        ];
+        store.append(&entries).unwrap();
+
+        let rows = store
+            .query(&Query {
+                dir: Some("/a".into()),
+                limit: None,
+                uniq: true,
+            })
+            .unwrap();
+        // Only /a rows remain; consecutive after the filter, so they collapse
+        // to the newest. A dedupe before the filter would have kept t1.
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].entry.t, 3);
     }
 
     #[test]

@@ -238,6 +238,82 @@ fn list_limit_returns_the_newest_rows_and_zero_means_unlimited() {
 }
 
 #[test]
+fn list_uniq_collapses_consecutive_repeats_to_newest() {
+    let dir = tempfile::tempdir().unwrap();
+    // Three "dup" in a row, then "keep", then two more "dup": each run
+    // collapses to one row, and the later run keeps the newer timestamp.
+    for (cmd, n) in [
+        ("dup", 1),
+        ("dup", 2),
+        ("dup", 3),
+        ("keep", 4),
+        ("dup", 5),
+        ("dup", 6),
+    ] {
+        add(
+            dir.path(),
+            cmd,
+            &[
+                "-dir",
+                "/tmp",
+                "-exit",
+                "0",
+                "-ts",
+                &(1_700_000_000 + n).to_string(),
+            ],
+        );
+    }
+
+    let full = stdout(&run(dir.path(), &["list"]));
+    assert_eq!(full.lines().count(), 6);
+
+    let uniq = stdout(&run(dir.path(), &["list", "-uniq"]));
+    let lines: Vec<&str> = uniq.lines().collect();
+    assert_eq!(lines.len(), 3, "got: {:?}", lines);
+    // Newest first: the trailing run of "dup", then "keep", then the first
+    // run's newest "dup".
+    assert!(lines[0].contains("dup"));
+    assert!(lines[1].contains("keep"));
+    assert!(lines[2].contains("dup"));
+}
+
+#[test]
+fn list_uniq_with_limit_returns_limit_distinct_commands() {
+    let dir = tempfile::tempdir().unwrap();
+    // cmd0..cmd3 then a run of "dup": limit 3 + uniq must widen past the run
+    // to return dup plus the two newest distinct commands.
+    for (cmd, n) in [
+        ("cmd0", 0),
+        ("cmd1", 1),
+        ("cmd2", 2),
+        ("cmd3", 3),
+        ("dup", 4),
+        ("dup", 5),
+        ("dup", 6),
+    ] {
+        add(
+            dir.path(),
+            cmd,
+            &[
+                "-dir",
+                "/tmp",
+                "-exit",
+                "0",
+                "-ts",
+                &(1_700_000_000 + n).to_string(),
+            ],
+        );
+    }
+
+    let out = stdout(&run(dir.path(), &["list", "-limit", "3", "-uniq"]));
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 3, "got: {:?}", lines);
+    assert!(lines[0].contains("dup"));
+    assert!(lines[1].contains("cmd3"));
+    assert!(lines[2].contains("cmd2"));
+}
+
+#[test]
 fn init_layout_vars_match_what_list_actually_emits() {
     let dir = tempfile::tempdir().unwrap();
     add(dir.path(), "cargo build", &["-dir", "/tmp", "-exit", "0"]);

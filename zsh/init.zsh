@@ -71,16 +71,24 @@ _fhistory_select() {
 	local lim="${limarg:+ ${(j: :)limarg}}"
 	# Mode lives in a file, not the prompt: the info line renders it and every
 	# reload — the first one included — reads it back, so nothing else states
-	# it. One file per picker, so two shells cannot collide.
-	local mfile
+	# it. One file per picker, so two shells cannot collide. The dedupe toggle
+	# is a second file, so the two states never share a format.
+	local mfile ufile
 	mfile=$(mktemp "${TMPDIR:-/tmp}/zhis-mode.XXXXXX") || return
 	print -r -- dir > "$mfile"
+	ufile=$(mktemp "${TMPDIR:-/tmp}/zhis-uniq.XXXXXX") || return
+	print -r -- off > "$ufile"
 	local qm=${(q)mfile}
+	local qu=${(q)ufile}
 	local mread="IFS= read -r m < $qm"
-	local reload="$mread; if [ \"\$m\" = dir ]; then zhis list$lim -dir $qpwd; else zhis list$lim; fi"
+	local uread="IFS= read -r u < $qu"
+	# $ua carries -uniq into list when the dedupe view is on; reload reads both
+	# files, so a toggle applies to every subsequent reload.
+	local reload="$mread; $uread; ua=; [ \"\$u\" = on ] && ua=-uniq; if [ \"\$m\" = dir ]; then zhis list$lim \$ua -dir $qpwd; else zhis list$lim \$ua; fi"
 	local flip="$mread; if [ \"\$m\" = dir ]; then echo global > $qm; else echo dir > $qm; fi"
+	local uflip="$uread; if [ \"\$u\" = on ]; then echo off > $qu; else echo on > $qu; fi"
 	# $FZF_INFO is the match counter fzf would have drawn on its own.
-	local info="$mread; printf '%s %s' \"\$FZF_INFO\" \"\$m\""
+	local info="$mread; $uread; s=; [ \"\$u\" = on ] && s=/uniq; printf '%s %s%s' \"\$FZF_INFO\" \"\$m\" \"\$s\""
 	# The off-switch, not the per-row decision, persists across sessions.
 	local pstate="${XDG_STATE_HOME:-$HOME/.local/state}/zhis/preview-hidden"
 	mkdir -p "${pstate:h}"
@@ -106,13 +114,14 @@ _fhistory_select() {
 			--bind "tab:accept" \
 			--bind "ctrl-/:execute-silent(if [ -f $qstate ]; then rm -f $qstate; else touch $qstate; fi)+transform:$fit" \
 			--bind "ctrl-g:execute-silent($flip)+reload($reload)" \
+			--bind "ctrl-u:execute-silent($uflip)+reload($reload)" \
 			--bind "focus:transform:$fit" \
 			--bind "resize:transform:$fit" \
 			--bind "ctrl-d:execute-silent(zhis delete -id $idf)+reload($reload)" \
 			--bind "ctrl-x:execute-silent(zhis delete -id $idf -all)+reload($reload)" \
 			< /dev/null |
 		cut -d"$_zhis_delim" -f"$_zhis_id_field")
-	rm -f "$mfile"
+	rm -f "$mfile" "$ufile"
 	[[ -n "$id" ]] && zhis get -id "$id"
 }
 

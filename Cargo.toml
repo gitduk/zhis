@@ -1,6 +1,6 @@
 [package]
 name = "zhis"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 description = "A shell history tool for zsh, written in Rust. Records every command with its working directory, exit status, and duration."
 license = "MIT"
