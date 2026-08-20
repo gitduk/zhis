@@ -53,7 +53,7 @@ blank directory and never render red.
 | `ctrl-r`           | Open the picker, searching for what is on the line |
 | `up` / `down`      | Open the picker on an empty line; otherwise step line history |
 | `ctrl-g`           | Toggle global / current-directory history         |
-| `ctrl-u`           | Toggle collapsing consecutive repeats to one row  |
+| `ctrl-u`           | Toggle the dedupe view (on by default)            |
 | `ctrl-d`           | Delete the selected entry (no-op on a running one) |
 | `ctrl-x`           | Delete all entries with the same command          |
 | `ctrl-/`           | Turn the preview off, or back to automatic (remembered) |
@@ -117,10 +117,9 @@ Commands excluded from history — a leading space, or a first word in
 
 ## Repeated commands
 
-Repeated runs each get a row — the store stays faithful to what you did, exit
-status and duration included. The picker has a dedupe view for when a run of
-repeats drowns everything else: `ctrl-u` collapses each consecutive run of the
-same command to its newest entry.
+Repeated runs each get a row in the store — exit status and duration included.
+The picker collapses each consecutive run of the same command to its newest
+entry by default; `ctrl-u` toggles back to the full, faithful view.
 
 - A run is a sequence of identical command text; exit status and duration do
   not break it, so the row shown is the run's most recent attempt.
@@ -129,7 +128,7 @@ same command to its newest entry.
 - With `ZHIS_LIST_LIMIT`, the dedupe view reads back far enough to show that
   many distinct commands; the limit caps the collapsed rows, not the raw
   entries behind them.
-- The store is untouched; toggle back to see every entry.
+- The store is untouched; toggle off to see every entry.
 
 ## Large histories
 

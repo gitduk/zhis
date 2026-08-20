@@ -375,6 +375,16 @@ fn init_arrow_binds_are_opt_out() {
 }
 
 #[test]
+fn init_defaults_the_dedupe_toggle_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = stdout(&run(dir.path(), &["init"]));
+    assert!(
+        out.contains("print -r -- on > \"$ufile\""),
+        "init does not default the dedupe toggle to on"
+    );
+}
+
+#[test]
 fn ctrl_r_is_bound_in_every_keymap_the_user_types_in() {
     let dir = tempfile::tempdir().unwrap();
     let out = stdout(&run(dir.path(), &["init"]));

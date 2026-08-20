@@ -77,7 +77,7 @@ _fhistory_select() {
 	mfile=$(mktemp "${TMPDIR:-/tmp}/zhis-mode.XXXXXX") || return
 	print -r -- dir > "$mfile"
 	ufile=$(mktemp "${TMPDIR:-/tmp}/zhis-uniq.XXXXXX") || return
-	print -r -- off > "$ufile"
+	print -r -- on > "$ufile"
 	local qm=${(q)mfile}
 	local qu=${(q)ufile}
 	local mread="IFS= read -r m < $qm"
