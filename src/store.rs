@@ -98,11 +98,13 @@ impl<'a> StoredLineRef<'a> {
     }
 }
 
-/// An entry plus the ID the fzf picker sees.
+/// An entry plus the ID the fzf picker sees, and how many consecutive
+/// repeats it stands for (1 outside the dedupe view).
 #[derive(Debug, Clone)]
 pub struct Row {
     pub entry: Entry,
     pub id: String,
+    pub count: usize,
 }
 
 /// What the picker asks for. `None` means unrestricted; `uniq` collapses
@@ -119,6 +121,7 @@ struct StoredRow {
     id: String,
     offset: i64,
     i: i64,
+    count: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -215,6 +218,7 @@ impl Store {
             .map(|r| Row {
                 entry: r.entry,
                 id: r.id,
+                count: r.count,
             })
             .collect())
     }
@@ -224,7 +228,7 @@ impl Store {
     pub fn query(&self, q: &Query) -> Result<Vec<Row>, StoreError> {
         let dir = q.dir.as_deref();
         // `read_tail` with `uniq` already returns rows sorted newest-first and
-        // collapsed; every other path returns file-order rows needing both.
+        // folded; every other path returns file-order rows needing both.
         let presorted = q.uniq && q.limit.is_some();
         let mut rows = self.with_lock(LockMode::Sh, || match q.limit {
             None => self.read_rows(0, dir, None),
@@ -236,8 +240,7 @@ impl Store {
             rows.sort_by_key(|r| r.entry.t);
             rows.reverse();
             if q.uniq {
-                // dedup keeps each run's first row, the newest after the reverse.
-                rows.dedup_by(|a, b| a.entry.c == b.entry.c);
+                fold_runs(&mut rows);
             }
         }
         if let Some(want) = q.limit {
@@ -248,12 +251,13 @@ impl Store {
             .map(|r| Row {
                 entry: r.entry,
                 id: r.id,
+                count: r.count,
             })
             .collect())
     }
 
     /// Reads back far enough to yield `want` matching rows, widening the
-    /// window for a sparse `dir` filter or, with `uniq`, for deduped shrinkage.
+    /// window for a sparse `dir` filter or, with `uniq`, for folded shrinkage.
     fn read_tail(
         &self,
         want: usize,
@@ -286,7 +290,7 @@ impl Store {
     }
 
     /// Reads `from`..EOF filtered by `dir`; with `uniq`, sorts newest-first
-    /// and collapses consecutive repeats so the survivors can be counted.
+    /// and folds consecutive repeats, counting each run.
     fn read_window(
         &self,
         f: &mut File,
@@ -299,7 +303,7 @@ impl Store {
         if uniq {
             rows.sort_by_key(|r| r.entry.t);
             rows.reverse();
-            rows.dedup_by(|a, b| a.entry.c == b.entry.c);
+            fold_runs(&mut rows);
         }
         Ok(rows)
     }
@@ -448,6 +452,7 @@ impl Store {
                     entry,
                     offset,
                     i,
+                    count: 1,
                 });
             }
             offset += line.len() as i64;
@@ -682,6 +687,26 @@ fn read_last_line(f: &mut File, size: i64) -> io::Result<Option<Vec<u8>>> {
         line.pop();
     }
     Ok(Some(line))
+}
+
+/// Folds each run of same-command rows into its newest, counting the run.
+/// The caller must pass rows sorted newest-first.
+fn fold_runs(rows: &mut Vec<StoredRow>) {
+    if rows.len() <= 1 {
+        return;
+    }
+    let mut w = 0;
+    for r in 1..rows.len() {
+        if rows[w].entry.c == rows[r].entry.c {
+            rows[w].count += 1;
+        } else {
+            w += 1;
+            if w != r {
+                rows.swap(w, r);
+            }
+        }
+    }
+    rows.truncate(w + 1);
 }
 
 fn encode_line(i: i64, entry: &Entry) -> Result<Vec<u8>, StoreError> {
@@ -1709,12 +1734,15 @@ mod tests {
                 uniq: true,
             })
             .unwrap();
-        // Newest first; the run of "same" collapses to its newest entry.
+        // Newest first; the run of "same" folds to its newest entry.
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].entry.c, "two");
         assert_eq!(rows[1].entry.c, "same");
-        assert_eq!(rows[1].entry.t, 4, "collapsed run keeps its newest entry");
+        assert_eq!(rows[1].entry.t, 4, "folded run keeps its newest entry");
+        assert_eq!(rows[1].count, 3, "folded run did not count its repeats");
+        assert_eq!(rows[0].count, 1);
         assert_eq!(rows[2].entry.c, "one");
+        assert_eq!(rows[2].count, 1);
     }
 
     #[test]

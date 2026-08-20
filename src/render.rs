@@ -93,9 +93,9 @@ fn display_command(c: &str) -> String {
 /// The one row-layout literal, so the two row kinds cannot drift apart.
 /// FIELD_DELIM is invisible on screen, so each field's own trailing space
 /// keeps a visible gap (fzf --with-nth reassembles using that same byte).
-fn format_line(id: &str, dur: &str, ago: &str, col: &str, disp: &str) -> String {
+fn format_line(id: &str, dur: &str, ago: &str, count: &str, col: &str, disp: &str) -> String {
     format!(
-        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{col}{disp}{reset}",
+        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{count}{col}{disp}{reset}",
         d = FIELD_DELIM,
         dim = C_DIM,
         reset = C_RESET,
@@ -106,10 +106,16 @@ fn format_line(id: &str, dur: &str, ago: &str, col: &str, disp: &str) -> String 
 /// One `zhis list` line: id, duration, relative time, then the command.
 pub fn format_row(row: &Row, now: i64) -> String {
     let e = &row.entry;
+    let count = if row.count > 1 {
+        format!("{}×{} {}", C_DIM, row.count, C_RESET)
+    } else {
+        String::new()
+    };
     format_line(
         &row.id,
         &fmt_dur(e.m),
         &rel_time(e.t, now),
+        &count,
         if e.x > 0 { C_RED } else { "" },
         &display_command(&e.c),
     )
@@ -126,6 +132,7 @@ pub fn format_running_row(row: &Row, now: i64) -> String {
         &row.id,
         &fmt_dur(elapsed),
         "...",
+        "",
         C_DIM,
         &display_command(&e.c),
     )
@@ -190,6 +197,7 @@ mod tests {
                 m: 0,
             },
             id: "0-1".into(),
+            count: 1,
         };
         let out = format_row(&row, 0);
         // The row's own three delimiters are all that may appear; a command
@@ -205,6 +213,42 @@ mod tests {
     }
 
     #[test]
+    fn format_row_shows_the_collapse_count() {
+        use crate::store::Entry;
+        let folded = Row {
+            entry: Entry {
+                t: 0,
+                d: "/d".into(),
+                x: 0,
+                c: "dup".into(),
+                m: 0,
+            },
+            id: "0-1".into(),
+            count: 15,
+        };
+        assert!(
+            format_row(&folded, 0).contains("×15"),
+            "folded row lacks its count"
+        );
+
+        let single = Row {
+            entry: Entry {
+                t: 0,
+                d: "/d".into(),
+                x: 0,
+                c: "dup".into(),
+                m: 0,
+            },
+            id: "0-1".into(),
+            count: 1,
+        };
+        assert!(
+            !format_row(&single, 0).contains('×'),
+            "single row shows a count"
+        );
+    }
+
+    #[test]
     fn format_running_row_keeps_the_row_contract() {
         use crate::store::Entry;
         let row = Row {
@@ -216,6 +260,7 @@ mod tests {
                 m: 0,
             },
             id: "@4242".into(),
+            count: 1,
         };
         let out = format_running_row(&row, 160);
         // Same three-delimiter contract format_row keeps: a command carrying

@@ -123,6 +123,7 @@ entry by default; `ctrl-u` toggles back to the full, faithful view.
 
 - A run is a sequence of identical command text; exit status and duration do
   not break it, so the row shown is the run's most recent attempt.
+- A folded row shows `×N`, the number of runs it stands for.
 - Only consecutive repeats collapse. The same command separated by other
   commands still shows every occurrence.
 - With `ZHIS_LIST_LIMIT`, the dedupe view reads back far enough to show that

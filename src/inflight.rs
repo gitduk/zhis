@@ -177,6 +177,7 @@ pub fn rows(data_path: &Path, dir: Option<&str>) -> Vec<Row> {
         .rev()
         .map(|(pid, rec)| Row {
             id: make_id(pid),
+            count: 1,
             entry: Entry {
                 t: rec.t,
                 d: rec.d,
