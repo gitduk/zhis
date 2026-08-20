@@ -95,7 +95,7 @@ fn display_command(c: &str) -> String {
 /// keeps a visible gap (fzf --with-nth reassembles using that same byte).
 fn format_line(id: &str, dur: &str, ago: &str, count: &str, col: &str, disp: &str) -> String {
     format!(
-        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{count}{col}{disp}{reset}",
+        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{col}{disp}{count}{reset}",
         d = FIELD_DELIM,
         dim = C_DIM,
         reset = C_RESET,
@@ -107,7 +107,7 @@ fn format_line(id: &str, dur: &str, ago: &str, count: &str, col: &str, disp: &st
 pub fn format_row(row: &Row, now: i64) -> String {
     let e = &row.entry;
     let count = if row.count > 1 {
-        format!("{}×{} {}", C_DIM, row.count, C_RESET)
+        format!("{}{} ×{}", C_RESET, C_DIM, row.count)
     } else {
         String::new()
     };
@@ -226,10 +226,10 @@ mod tests {
             id: "0-1".into(),
             count: 15,
         };
-        assert!(
-            format_row(&folded, 0).contains("×15"),
-            "folded row lacks its count"
-        );
+        let out = format_row(&folded, 0);
+        let cmd = out.find("dup").unwrap();
+        let cnt = out.find("×15").unwrap();
+        assert!(cmd < cnt, "count must follow the command: {:?}", out);
 
         let single = Row {
             entry: Entry {
