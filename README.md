@@ -207,6 +207,7 @@ but typing one by hand is not a thing you should need to do:
 zhis begin -pid N [-dir D] [-ts N]  Mark a command as started; command from stdin
 zhis add -dir D -exit N [-ms N] [-ts N] [-pid N]  Append an entry; command from stdin
 zhis get -id ID           Print the full command for an entry
+zhis fit -id ID -cols N [-count N]   Lines the preview needs; exit 1 means none
 zhis delete -id ID [-all] Delete an entry, or all entries with its command
 ```
 

@@ -1,6 +1,8 @@
 //! Everything `zhis list` prints to a row, and the row-layout contract that
 //! `zhis init` hands to the shell so init.zsh's fzf flags can't drift from it.
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::store::Row;
 
 pub const C_BLUE: &str = "\x1b[34m";
@@ -90,16 +92,108 @@ fn display_command(c: &str) -> String {
         .collect()
 }
 
+// fzf's preview window: the rounded border plus its padding take two columns
+// a side. init.zsh pins the flag so this can stay a constant.
+const PREVIEW_CHROME: usize = 4;
+// Columns before the command in a row: pointer, marker, duration, age,
+// scrollbar — fzf draws them whether or not the list actually scrolls.
+const ROW_CHROME: usize = 14;
+// Past this the preview crowds out the list it is there to explain.
+const PREVIEW_MAX_LINES: usize = 10;
+// $FZF_COLUMNS arrives as 0 until fzf has sized its window.
+const FALLBACK_COLS: usize = 80;
+const MIN_COLS: usize = 24;
+
+/// Columns `s` draws in fzf: CJK is two, a tab is one (--tabstop=1 is
+/// pinned), and ANSI escapes draw none (fzf renders them as colors).
+fn display_width(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut width = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\t' {
+            width += 1;
+            i += 1;
+        } else if bytes[i] == b'\x1b' {
+            i += 1;
+            if i < bytes.len() && bytes[i] == b'[' {
+                // CSI: skip the parameters, then the final byte.
+                i += 1;
+                while i < bytes.len() {
+                    let b = bytes[i];
+                    i += 1;
+                    if (0x40..=0x7e).contains(&b) {
+                        break;
+                    }
+                }
+            } else {
+                // A two-byte sequence, or a trailing ESC: no columns either.
+                i += 1;
+            }
+        } else {
+            let c = s[i..].chars().next().unwrap();
+            width += c.width().unwrap_or(0);
+            i += c.len_utf8();
+        }
+    }
+    width
+}
+
+/// Lines the preview needs to show `cmd` whole in a `cols`-wide fzf window,
+/// or None when the row already shows all of it and needs no preview.
+/// `count` is the folded row's repeat count: its " ×N" suffix narrows the
+/// command's room in the row, so the bound is exact only with it.
+pub fn preview_lines(cmd: &str, cols: usize, count: usize) -> Option<usize> {
+    let cols = if cols < MIN_COLS { FALLBACK_COLS } else { cols };
+    let text = cols - PREVIEW_CHROME;
+    let suffix = if count > 1 {
+        2 + count.to_string().len()
+    } else {
+        0
+    };
+    let row = cols.saturating_sub(ROW_CHROME + suffix);
+
+    let mut lines = 0;
+    let mut count = 0;
+    let mut clipped = false;
+    for line in cmd.lines() {
+        let w = display_width(line);
+        if count == 0 {
+            clipped = w > row;
+        }
+        // An empty line still occupies one.
+        lines += w.div_ceil(text).max(1);
+        count += 1;
+    }
+    if count < 2 && !clipped {
+        return None;
+    }
+    Some(lines.min(PREVIEW_MAX_LINES))
+}
+
 /// The one row-layout literal, so the two row kinds cannot drift apart.
 /// FIELD_DELIM is invisible on screen, so each field's own trailing space
 /// keeps a visible gap (fzf --with-nth reassembles using that same byte).
 fn format_line(id: &str, dur: &str, ago: &str, count: &str, col: &str, disp: &str) -> String {
+    // Its own trailing field: the picker hands it to `zhis fit` as {5}, so
+    // the row is bounded by the real " ×N" width, not a worst case.
+    let count_field = if count.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{d}{dim} ×{count}{reset}",
+            d = FIELD_DELIM,
+            dim = C_DIM,
+            reset = C_RESET,
+        )
+    };
     format!(
-        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{col}{disp}{count}{reset}",
+        "{id}{d}{dim}{dur:>6} {reset}{d}{blue}{ago:>3} {reset}{d}{col}{disp}{reset}{count_field}",
         d = FIELD_DELIM,
         dim = C_DIM,
         reset = C_RESET,
         blue = C_BLUE,
+        count_field = count_field,
     )
 }
 
@@ -107,7 +201,7 @@ fn format_line(id: &str, dur: &str, ago: &str, count: &str, col: &str, disp: &st
 pub fn format_row(row: &Row, now: i64) -> String {
     let e = &row.entry;
     let count = if row.count > 1 {
-        format!("{}{} ×{}", C_RESET, C_DIM, row.count)
+        row.count.to_string()
     } else {
         String::new()
     };
@@ -152,6 +246,63 @@ pub fn zsh_layout_vars() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_width_counts_columns_not_characters() {
+        assert_eq!(display_width("cargo build"), 11);
+        // The case awk got wrong: 18 characters, 30 columns on screen.
+        let cjk = "msg=\"对方违约，拖欠货款三个月\"";
+        assert_eq!(cjk.chars().count(), 18);
+        assert_eq!(display_width(cjk), 30);
+    }
+
+    #[test]
+    fn display_width_counts_a_tab_as_one_column() {
+        // fzf's --tabstop=1 draws one column per tab in the list and the
+        // preview; unicode-width assigns none, so raw widths would
+        // under-measure every indented line.
+        assert_eq!(display_width("a\tb"), 3);
+        assert_eq!(display_width("\t\tlong"), 6);
+        // fzf renders ANSI escapes as color codes: they draw no columns.
+        assert_eq!(display_width("\x1b[31mred\x1b[0m"), 3);
+    }
+
+    #[test]
+    fn preview_lines_wraps_on_columns_not_characters() {
+        // 50 CJK characters draw 100 columns: two lines in a 96-column
+        // preview, where counting characters would have called it one.
+        let cjk = "中".repeat(50);
+        assert_eq!(cjk.chars().count(), 50);
+        assert_eq!(display_width(&cjk), 100);
+        assert_eq!(preview_lines(&cjk, 100, 1), Some(2));
+    }
+
+    #[test]
+    fn preview_lines_sizes_the_window_fzf_will_draw() {
+        // At 115 columns the preview holds 111 and a plain row 101.
+        assert_eq!(preview_lines(&"x".repeat(113), 115, 1), Some(2));
+        assert_eq!(preview_lines(&"x".repeat(111), 115, 1), Some(1));
+        // Fits its column: the row shows it all already, so no preview.
+        assert_eq!(preview_lines(&"x".repeat(101), 115, 1), None);
+        assert_eq!(preview_lines(&"x".repeat(102), 115, 1), Some(1));
+        // A folded row's " ×N" narrows the row by exactly its own width.
+        assert_eq!(preview_lines(&"x".repeat(97), 115, 15), None);
+        assert_eq!(preview_lines(&"x".repeat(98), 115, 15), Some(1));
+        // A multiline command always previews, each line wrapped on its own.
+        assert_eq!(preview_lines("a\nb", 115, 1), Some(2));
+        assert_eq!(
+            preview_lines(&format!("{}\nb", "x".repeat(113)), 115, 1),
+            Some(3)
+        );
+        // Ten lines is the cap, so a long script cannot swallow the list.
+        assert_eq!(preview_lines(&"a\n".repeat(40), 115, 1), Some(10));
+        // An unset $FZF_COLUMNS arrives as 0 and falls back to 80.
+        assert_eq!(preview_lines(&"x".repeat(77), 0, 1), Some(2));
+        assert_eq!(preview_lines("", 115, 1), None);
+        // A narrow window and an absurd count must not underflow the row
+        // bound; it just means the row cannot show the command.
+        assert_eq!(preview_lines("x", 24, usize::MAX), Some(1));
+    }
 
     #[test]
     fn fmt_dur_cases() {
@@ -228,8 +379,9 @@ mod tests {
         };
         let out = format_row(&folded, 0);
         let cmd = out.find("dup").unwrap();
-        let cnt = out.find("×15").unwrap();
+        let cnt = out.find('×').unwrap();
         assert!(cmd < cnt, "count must follow the command: {:?}", out);
+        assert!(out[cnt..].contains("15"), "count digits lost: {:?}", out);
 
         let single = Row {
             entry: Entry {

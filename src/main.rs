@@ -12,13 +12,13 @@ mod store;
 
 use std::fs::File;
 use std::io::{self, BufWriter, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use cli::{die_err, die_usage, flags_or_die, int_flag};
 use import::{import_history, import_jsonl};
-use render::{format_row, format_running_row, zsh_layout_vars};
+use render::{format_row, format_running_row, preview_lines, zsh_layout_vars};
 use store::{Entry, Query, Store, StoreError};
 
 // The zsh integration is emitted by `zhis init`; see zsh/init.zsh.
@@ -162,21 +162,51 @@ fn cmd_list(args: &[String]) {
     let _ = w.flush();
 }
 
+/// The command an id names, whether it is a finished entry or a live one.
+/// None for an id the store no longer holds; callers exit 1 on it, which is
+/// how the picker learns a row went away under it.
+fn command_for_id(path: PathBuf, id: &str) -> Option<String> {
+    if inflight::parse_id(id).is_some() {
+        return inflight::get(&path, id);
+    }
+    match Store::new(path).get(id) {
+        Ok(entry) => Some(entry.c),
+        Err(StoreError::EntryNotFound) => None,
+        Err(e) => die_err(&e),
+    }
+}
+
 fn cmd_get(args: &[String]) {
     let flags = flags_or_die(args, &["id"], &[]);
     let id = flags.get("id").cloned().unwrap_or_default();
-    let path = data_path();
-    if inflight::parse_id(&id).is_some() {
-        match inflight::get(&path, &id) {
-            Some(cmd) => println!("{}", cmd),
-            None => exit(1),
-        }
-        return;
+    match command_for_id(data_path(), &id) {
+        Some(cmd) => println!("{}", cmd),
+        None => exit(1),
     }
-    match Store::new(path).get(&id) {
-        Ok(entry) => println!("{}", entry.c),
-        Err(StoreError::EntryNotFound) => exit(1),
-        Err(e) => die_err(&e),
+}
+
+/// How tall a preview the picker must open for a row, asked on every focus;
+/// see the fit transform in zsh/init.zsh. Exit 1 means "show no preview".
+/// -count is the folded row's " ×N" field; the picker passes {5}, which
+/// fzf hands over with ANSI stripped and the space trimmed.
+fn cmd_fit(args: &[String]) {
+    let flags = flags_or_die(args, &["id", "cols", "count"], &[]);
+    let id = flags.get("id").cloned().unwrap_or_default();
+    // Not int_flag: an empty $FZF_COLUMNS is a fallback, not a usage error.
+    let cols = flags
+        .get("cols")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let count = flags
+        .get("count")
+        .and_then(|v| {
+            let v = v.trim();
+            v.strip_prefix('×').unwrap_or(v).parse::<usize>().ok()
+        })
+        .unwrap_or(0);
+    match command_for_id(data_path(), &id).and_then(|cmd| preview_lines(&cmd, cols, count)) {
+        Some(n) => println!("{}", n),
+        None => exit(1),
     }
 }
 
@@ -234,7 +264,7 @@ fn cmd_init(args: &[String]) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
-        eprintln!("usage: zhis <init|add|begin|list|get|delete|import|import-jsonl> [flags]");
+        eprintln!("usage: zhis <init|add|begin|list|get|fit|delete|import|import-jsonl> [flags]");
         exit(2);
     }
     match args[0].as_str() {
@@ -243,6 +273,7 @@ fn main() {
         "begin" => cmd_begin(&args[1..]),
         "list" => cmd_list(&args[1..]),
         "get" => cmd_get(&args[1..]),
+        "fit" => cmd_fit(&args[1..]),
         "delete" => cmd_delete(&args[1..]),
         "import" => cmd_import(&args[1..]),
         "import-jsonl" => cmd_import_jsonl(&args[1..]),

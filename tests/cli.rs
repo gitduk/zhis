@@ -398,6 +398,76 @@ fn ctrl_r_is_bound_in_every_keymap_the_user_types_in() {
 }
 
 #[test]
+fn init_pins_the_preview_geometry_its_height_math_assumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = stdout(&run(dir.path(), &["init"]));
+    // The awk's `w - 4` is fzf's rounded border plus its padding, measured;
+    // a wrap sign would narrow continuation lines out of that one width.
+    assert!(
+        out.contains("--preview-border=rounded"),
+        "preview border unpinned: `w - 4` no longer describes the text column"
+    );
+    assert!(
+        out.contains("--preview-wrap-sign=\"\""),
+        "wrap sign back on: continuation lines are 2 columns narrower"
+    );
+    assert!(
+        out.contains("--tabstop=1"),
+        "tabstop unpinned: display_width counts a tab as one column"
+    );
+}
+
+#[test]
+fn fit_bounds_the_folded_row_by_its_real_count() {
+    let dir = tempfile::tempdir().unwrap();
+    // 99 columns fits a plain row (115 - 14) but not one folded as " ×2"
+    // (115 - 14 - 3), so the count the picker passes must decide the bound.
+    let long = "x".repeat(99);
+    for _ in 0..2 {
+        add(dir.path(), &long, &["-dir", "/tmp", "-exit", "0"]);
+    }
+    let uniq = stdout(&run(dir.path(), &["list", "-uniq"]));
+    let id = first_field(dir.path(), uniq.lines().next().unwrap());
+    let fit = |count: &str| {
+        run(
+            dir.path(),
+            &["fit", "-id", &id, "-cols", "115", "-count", count],
+        )
+    };
+
+    // Without the count the row is judged to show the whole command.
+    assert!(!fit("").status.success());
+    // The folded suffix " ×2" narrows the row to 98: a preview is needed.
+    assert_eq!(stdout(&fit("×2")).trim(), "1");
+}
+
+#[test]
+fn fit_sizes_the_preview_from_the_row_the_picker_will_draw() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "x".repeat(113);
+    add(dir.path(), &long, &["-dir", "/tmp", "-exit", "0"]);
+    let row = stdout(&run(dir.path(), &["list"]));
+    let id = first_field(dir.path(), row.lines().next().unwrap());
+    let fit = |cols: &str| run(dir.path(), &["fit", "-id", &id, "-cols", cols]);
+
+    // 115 columns leaves the preview 111, so 113 needs a second line.
+    assert_eq!(stdout(&fit("115")).trim(), "2");
+    // Wide enough that the row itself shows the whole command: no preview,
+    // which the picker reads off the exit status.
+    assert!(!fit("200").status.success());
+    // An empty $FZF_COLUMNS is a fallback (80 columns), not a usage error.
+    assert_eq!(stdout(&fit("")).trim(), "2");
+    // A row deleted under the picker must hide the preview, not error out.
+    let gone = run(dir.path(), &["fit", "-id", "0-999", "-cols", "115"]);
+    assert!(!gone.status.success());
+    assert_eq!(
+        gone.status.code(),
+        Some(1),
+        "a gone row must exit 1 (the no-preview signal), not succeed"
+    );
+}
+
+#[test]
 fn import_jsonl_reads_stdin_and_reports_count() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = zhis(dir.path())
